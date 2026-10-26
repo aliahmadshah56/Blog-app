@@ -4,3 +4,6 @@ blog_project/__pycache__/
 db.sqlite3
 .env
 venv/
+
+k8s/db-secret.yml
+k8s/web-secret.yml

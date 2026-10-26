@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-deployment
+  namespace: blog-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: web-container
+        image: aliahmadshah/blog-app-web:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000 
+        envFrom:
+        - configMapRef:
+            name: web-configmap
+        - secretRef:
+            name: web-secret
+        volumeMounts:
+        - name: static-volume
+          mountPath: /app/static
+      volumes:
+      - name: static-volume
+        persistentVolumeClaim:
+          claimName: web-pvc
