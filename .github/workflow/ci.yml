@@ -1,0 +1,203 @@
+name: Blog-app-CI
+
+# ============================================================
+# TRIGGER
+# ============================================================
+on:
+ push:
+  branches:
+    - main
+ pull:
+  branches:
+    - main  
+ paths-ignore:
+    - 'k8s/**'
+
+# ============================================================
+# PERMISSIONS
+# ============================================================
+permissions:
+  contents: read
+
+# ============================================================
+# CONCURRENCY
+   # This avoids wasting resources on outdated CI runs.
+   # WARNING: A newer push can cancel an older in-progress run.
+# ============================================================
+concurrency:
+  group: ci-${{github.ref}}
+  cancel-in-progress: true
+
+# ============================================================
+# JOBS
+# ============================================================
+jobs:
+ ci:
+  name: CI
+  runs-on: ubuntu-latest
+  env: 
+   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/blog-app-web
+   IMAGE_TAG: ${{ github.sha }}
+
+  steps:
+  # ======================================================
+  # 1. CHECKOUT
+      # fetch-depth: 0 downloads the full Git history.
+      # This can help SonarQube and secret-scanning tools
+      # analyze commit history more effectively.
+  # ======================================================
+    - name: Checkout source code
+      uses: actions/checkout@v4
+      with: 
+       fetch-depth: 0    
+            
+  # ======================================================
+  # 2. GITLEAKS SECRET SCANNING
+      # Detect accidentally committed secrets, such as API keys and credentials.
+      # IMPORTANT:
+      # A detected secret must be revoked and rotated if exposed.
+      # Removing it from the latest commit alone is not enough.
+  # ======================================================
+    - name: Gitleaks secret scan
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ======================================================
+  # 3. TRIVY FILESYSTEM SCAN
+      # Scan the repository for:
+      # - Known vulnerabilities in detectable dependencies
+      # - Configuration misconfigurations
+      # - Potential secrets
+      
+      # exit-code: "1" means qualifying findings fail the step.
+      # ignore-unfixed: true ignores vulnerabilities without fixes.
+      
+      # NOTE:
+      # Gitleaks and Trivy both scan for secrets, so their coverage
+      # overlaps. Keeping both is optional.
+  # ======================================================
+    - name: Trivy filesystem scan
+      uses: aquasecurity/trivy-action@0.36.0
+      with:
+        scan-type: fs
+        scan-ref: .
+        scanners: vuln,misconfig,secret
+        severity: HIGH,CRITICAL
+        exit-code: "1"
+        ignore-unfixed: true
+  # ======================================================
+  # 4. OWASP DEPENDENCY-CHECK
+      # Analyze detectable project dependencies for known vulnerabilities.
+      # --failOnCVSS 7 makes the scan fail when a detected vulnerability meets the configured CVSS threshold.
+      # IMPORTANT:
+      # @main is a moving reference. Pin a reviewed release or commit SHA for a more secure production workflow.
+      # Verify that the scanner recognizes your Python dependencies.
+  # ======================================================
+    - name: OWASP Dependency-Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: Blog-app
+        path: .
+        format: HTML
+        args: >
+          --failOnCVSS 7
+
+  # ======================================================
+  # 5. UPLOAD DEPENDENCY-CHECK REPORT
+      # if: always() attempts to upload the report even when an earlier step fails.
+      # If Dependency-Check fails before creating a report, there may be no files to upload.
+  # ======================================================
+    - name: Upload dependency report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependency-check-report
+        path: reports/
+        if-no-files-found: ignore
+        retention-days: 7
+
+  # ======================================================
+  # 6. SONARQUBE CODE ANALYSIS
+      # Analyze code quality and supported security issues.
+      # PREREQUISITES:
+      # 1. A SonarQube project must already exist.
+      # 2. Configure the correct project key in sonar-project.properties or scanner arguments.
+      # 3. SONAR_TOKEN must be a valid token.
+      # 4. SONAR_HOST_URL must be reachable from GitHub Actions.
+      # IMPORTANT:
+      # localhost:9000 on a GitHub-hosted runner refers to the runner itself, NOT your local WSL computer.
+  # ======================================================
+    - name: SonarQube scan
+      uses: SonarSource/sonarqube-scan-action@v5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+  
+  # ======================================================
+  # 7. SONARQUBE QUALITY GATE
+      # A scan alone should not be treated as proof that the quality gate passed.
+      # This step checks the analysis result and fails the workflow if the quality gate fails or times out.
+      # Your configured SonarQube server/project must support the quality-gate integration.
+  # ======================================================
+    - name: SonarQube Quality Gate
+      uses: SonarSource/sonarqube-quality-gate-action@v1.1.0
+      timeout-minutes: 5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  # ======================================================
+  # 8. SET UP DOCKER BUILDX
+      # Buildx provides Docker's extended image-building features.
+  # ======================================================
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+  # ======================================================
+  # 9. BUILD DOCKER IMAGE
+      # Do not publish the image yet.
+      # Load the built image into the local Docker image store.
+      # Otherwise, the next Trivy step may not find the image.
+  # ======================================================
+    - name: build image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: false
+        load: true
+        tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+
+  # ======================================================
+  # 10. TRIVY DOCKER IMAGE SCAN
+      # Scan the actual locally built image for vulnerabilities.
+      # If qualifying vulnerabilities are found, the step fails and subsequent steps are skipped.
+      # IMPORTANT:
+      # This works because the previous Docker build uses load: true.
+  # ======================================================
+    - name: trivy vulnarability scanner 
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+        format: 'table'
+        exit-code: '1'
+        severity: 'HIGH,CRITICAL'
+        ignore-unfixed: true
+      
+  # ======================================================
+  # 11. LOGIN TO DOCKER HUB
+      # Authenticate only after the security scans have passed.
+      # Use a Docker Hub access token, not your account password.
+  # ======================================================
+    - name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_ACCESS_TOKEN }}
+  # ======================================================
+  # 12. PUSH THE ALREADY-SCANNED IMAGE
+  # ======================================================
+
+    - name: Push scanned image to Docker Hub
+      run: docker push "${IMAGE_NAME}:${IMAGE_TAG}"
