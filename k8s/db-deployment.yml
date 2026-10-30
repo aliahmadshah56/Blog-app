@@ -18,15 +18,43 @@ spec:
       - name: postgres-db-container
         image: postgres:15-alpine
         imagePullPolicy: IfNotPresent
+        #trivy fs
+        securityContext:
+         allowPrivilegeEscalation: false
+         readOnlyRootFilesystem: true
+         capabilities:
+          drop:
+           - ALL
+
         ports:
         - containerPort: 5432
+
+        # volumeMounts:
+        #  - name: postgres-data
+        #    mountPath: /var/lib/postgresql/data
+
+        #trivy fs
         volumeMounts:
-         - name: postgres-data
-           mountPath: /var/lib/postgresql/data
+          - name: postgres-data
+            mountPath: /var/lib/postgresql/data
+          - name: postgres-tmp
+            mountPath: /tmp
+          - name: postgres-run
+            mountPath: /var/run/postgresql
         envFrom:
         - secretRef:
             name: postgres-secrets
-      volumes:
-       - name: postgres-data
-         persistentVolumeClaim:
-           claimName: postgres-pvc
+      # volumes:
+      #  - name: postgres-data
+      #    persistentVolumeClaim:
+      #      claimName: postgres-pvc
+
+      # trivy fs
+        volumes:
+         - name: postgres-data
+           persistentVolumeClaim:
+             claimName: postgres-pvc
+         - name: postgres-tmp
+           emptyDir: {}
+         - name: postgres-run
+           emptyDir: {}

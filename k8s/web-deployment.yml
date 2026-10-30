@@ -17,6 +17,13 @@ spec:
       - name: web-container
         image: aliahmadshah/blog-app-web:latest
         imagePullPolicy: IfNotPresent
+        # trivy fs
+        securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
         ports:
         - containerPort: 8000 
         envFrom:
@@ -24,10 +31,26 @@ spec:
             name: web-configmap
         - secretRef:
             name: web-secret
+        # volumeMounts:
+        # - name: static-volume
+        #   mountPath: /app/static
+
+        # trivy fs
         volumeMounts:
-        - name: static-volume
-          mountPath: /app/static
+          - name: web-static
+            mountPath: /app/static
+          - name: web-tmp
+            mountPath: /tmp
+      # volumes:
+      # - name: static-volume
+      #   persistentVolumeClaim:
+      #     claimName: web-pvc
+
+      # trivy fs
+
       volumes:
-      - name: static-volume
-        persistentVolumeClaim:
-          claimName: web-pvc
+         - name: web-static
+           persistentVolumeClaim:
+            claimName: web-pvc
+         - name: web-tmp
+           emptyDir: {}
