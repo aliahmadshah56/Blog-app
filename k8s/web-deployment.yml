@@ -13,11 +13,16 @@ spec:
       labels:
         app: web
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
       containers:
       - name: web-container
         image: aliahmadshah/blog-app-web:latest
         imagePullPolicy: IfNotPresent
         # trivy fs
+        # Container-level security context
         securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
